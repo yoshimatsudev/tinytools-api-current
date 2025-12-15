@@ -114,6 +114,13 @@ export class WebhookService {
 
       let changedInvoice = false;
 
+      // Ensure itemsArray exists and is an array before iterating
+      if (!invoice['itemsArray'] || !Array.isArray(invoice['itemsArray'])) {
+        throw new BadRequestException(
+          `Invoice ${id} does not have a valid itemsArray. The invoice may be incomplete or invalid.`,
+        );
+      }
+
       for (const item of invoice['itemsArray']) {
         // console.log('item =>', item);
 

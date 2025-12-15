@@ -58,9 +58,28 @@ export class ApplicationFacade {
       userId,
     );
 
-    // Check for authentication errors first (before parsing)
+    // Validate response structure
+    if (!response || !response.response || response.response.length === 0) {
+      throw new NotFoundException(`Invoice ${id} not found or response is empty`);
+    }
+
+    // Check for domain redirects (e.g., erp.tiny.com.br -> erp.olist.com)
     if (response.response && response.response[0] && response.response[0].src) {
       const responseSrc = response.response[0].src;
+      
+      // Check for domain redirect
+      if (responseSrc.includes('window.location.href') && responseSrc.includes('replace')) {
+        const redirectMatch = responseSrc.match(/replace\([^,]+,\s*['"]([^'"]+)['"]/);
+        if (redirectMatch && redirectMatch[1]) {
+          const targetDomain = redirectMatch[1];
+          throw new BadRequestException(
+            `Invoice ${id} is on a different domain (${targetDomain}). ` +
+            `This invoice may belong to a different account or the domain configuration needs to be updated.`
+          );
+        }
+      }
+      
+      // Check for authentication errors
       if (
         responseSrc.includes('Sua sessão expirou') ||
         responseSrc.includes(constants.AUTH_ERROR_PREFIX) ||
@@ -73,6 +92,11 @@ export class ApplicationFacade {
     }
 
     const result = this.mapObject(response, constants.INVOICE_ITEM_PREFIX);
+
+    // Log warning only if itemsArray is missing (indicates potential response format change)
+    if (!result['itemsArray']) {
+      console.warn(`Invoice ${id}: Response missing itemsArray - possible format change`);
+    }
 
     // console.log(response);
 
@@ -488,37 +512,83 @@ export class ApplicationFacade {
     return _result.toFixed(2).toString().replace('.', ',');
   }
 
-  //adicionar um try catch e uns throws aqui
   private mapObject(object: object, prefix: string) {
     const props = object['response'];
     let result = {};
+    
+    if (!props || !Array.isArray(props) || props.length === 0) {
+      return result;
+    }
+
     props.forEach((element) => {
       if (element['cmd'] == 'as') result[element['elm']] = element['val'];
-      else if (element['cmd'] == 'sc' && element['src'].includes(prefix)) {
-        if (prefix == constants.INVOICE_ITEM_PREFIX) {
-          result['itemsArray'] = this.parseNestedArray(element['src']);
-        } else if (
-          prefix == constants.TEMP_ITEM_PREFIX ||
-          prefix == constants.SENT_TEMP_ITEM_PREFIX
-        ) {
-          const parsedSrc = this.parseNestedBraces(element['src']);
-          const parsedObj = JSON.parse(
-            unescape(parsedSrc[parsedSrc.length - 1]),
-          );
-          result = parsedObj;
+      else if (element['cmd'] == 'sc') {
+        // Check if this 'sc' command contains our prefix
+        if (element['src'] && element['src'].includes(prefix)) {
+          if (prefix == constants.INVOICE_ITEM_PREFIX) {
+            try {
+              result['itemsArray'] = this.parseNestedArray(element['src']);
+            } catch (error) {
+              // Log error but don't set itemsArray - let calling code handle it
+              console.error(`Error parsing itemsArray: ${error.message}`);
+            }
+          } else if (
+            prefix == constants.TEMP_ITEM_PREFIX ||
+            prefix == constants.SENT_TEMP_ITEM_PREFIX
+          ) {
+            const parsedSrc = this.parseNestedBraces(element['src']);
+            const parsedObj = JSON.parse(
+              unescape(parsedSrc[parsedSrc.length - 1]),
+            );
+            result = parsedObj;
+          }
         }
       } else if (element['cmd'] == 'rt') result['response'] = element['val'];
-      else if (element['cmd'] == 'rj') result['error'] = element['exc'];
+      else if (element['cmd'] == 'rj') {
+        result['error'] = element['exc'];
+        console.error('Response error:', element['exc']);
+      }
     });
 
     return result;
   }
 
   private parseNestedArray(text) {
-    const regex = /\[.*?\]/;
-    const match = text.match(regex);
+    // Find the position of setarArrayItens( and extract the array
+    const prefixIndex = text.indexOf('setarArrayItens(');
+    if (prefixIndex === -1) {
+      // Fallback: try to find any array pattern
+      const simpleRegex = /\[.*?\]/;
+      const match = text.match(simpleRegex);
+      if (!match) {
+        throw new Error(`Could not find array in text: ${text.substring(0, 200)}`);
+      }
+      return JSON.parse(match[0]);
+    }
 
-    const vetorString = match[0];
+    // Find the opening bracket after setarArrayItens(
+    const startIndex = text.indexOf('[', prefixIndex);
+    if (startIndex === -1) {
+      throw new Error(`Could not find opening bracket after setarArrayItens( in: ${text.substring(0, 200)}`);
+    }
+
+    // Find the matching closing bracket by counting brackets
+    let bracketCount = 0;
+    let endIndex = startIndex;
+    for (let i = startIndex; i < text.length; i++) {
+      if (text[i] === '[') bracketCount++;
+      if (text[i] === ']') bracketCount--;
+      if (bracketCount === 0) {
+        endIndex = i;
+        break;
+      }
+    }
+
+    if (bracketCount !== 0) {
+      throw new Error(`Unbalanced brackets in array: ${text.substring(startIndex, startIndex + 200)}`);
+    }
+
+    const vetorString = text.substring(startIndex, endIndex + 1);
     const vetor = JSON.parse(vetorString);
     return vetor;
   }
