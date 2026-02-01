@@ -229,9 +229,16 @@ export class ApplicationService {
 
     const { jar } = userClient;
     try {
-      const cookies = await jar.getCookies('https://erp.tiny.com.br/');
-      if (cookies && cookies.length > 0) {
-        console.log(`Clearing ${cookies.length} cookie(s) from jar for user ${userId}`);
+      // Clear cookies from both domains (old and new)
+      const tinyDomain = 'https://erp.tiny.com.br/';
+      const olistDomain = 'https://erp.olist.com/';
+      
+      const tinyCookies = await jar.getCookies(tinyDomain);
+      const olistCookies = await jar.getCookies(olistDomain);
+      const totalCookies = (tinyCookies?.length || 0) + (olistCookies?.length || 0);
+      
+      if (totalCookies > 0) {
+        console.log(`Clearing ${totalCookies} cookie(s) from jar for user ${userId}`);
         // Use removeAllCookies() to clear all cookies at once
         await jar.removeAllCookies();
       }
@@ -253,9 +260,14 @@ export class ApplicationService {
       const match = item.match(pattern);
       if (match) {
         const sessionId = match[1];
+        // Set cookie for both domains to handle redirects
         await jar.setCookie(
           'TINYSESSID=' + sessionId,
           'https://erp.tiny.com.br/',
+        );
+        await jar.setCookie(
+          'TINYSESSID=' + sessionId,
+          'https://erp.olist.com/',
         );
         return { cookie: sessionId };
       }
@@ -330,11 +342,26 @@ export class ApplicationService {
     const retryDelay = 2000;
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const querystring = require('querystring');
-    const url = `${constants.SCRAPED_BASE_URL}${endpoint}`;
+    
+    // Build URL - both login and invoice endpoints use new format with function in path
+    let url: string;
+    if (endpoint === constants.SCRAPED_LOGIN_ENDPOINT && 'metd' in params) {
+      // Login uses erp.tiny.com.br with format: {baseUrl}services/reforma.sistema.server/2/{encodedClass}/{method}
+      const encodedClass = encodeURIComponent(constants.LOGIN_FUNC_CLSS);
+      url = `${constants.SCRAPED_LOGIN_BASE_URL}${endpoint}/2/${encodedClass}/${params['metd']}`;
+    } else if (endpoint === constants.SCRAPED_INVOICE_ENDPOINT && 'func' in params) {
+      // Invoice also uses erp.tiny.com.br with format: {baseUrl}services/notas.fiscais.server/1/{function}
+      url = `${constants.SCRAPED_LOGIN_BASE_URL}${endpoint}/1/${params['func']}`;
+    } else {
+      // Fallback for other endpoints
+      url = `${constants.SCRAPED_BASE_URL}${endpoint}`;
+    }
+    
     const data = this.generateBRequestData(params, endpoint);
 
     const headers = {
       'x-custom-request-for': 'XAJAX',
+      'x-requested-with': 'XMLHttpRequest',
       'User-Agent':
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0',
     };
@@ -445,13 +472,17 @@ export class ApplicationService {
           break;
       }
 
+      const now = Date.now();
       return {
         type: 1,
         func: params['func'],
         argsLength: args.length,
-        timeInicio: new Date().getTime(),
+        timeInicio: now,
         versaoFront: constants.SCRAPED_FRONT_VERSTION,
-        location: `${constants.SCRAPED_BASE_URL}notas_fiscais#edit/${params['invoiceId']}`,
+        pageTime: Math.floor(now / 1000),
+        pageLastPing: '0',
+        location: `${constants.SCRAPED_LOGIN_BASE_URL}notas_fiscais#edit/${params['invoiceId']}`,
+        curRetry: '0',
         duplicidade: 0,
         args: args,
       };
@@ -464,20 +495,16 @@ export class ApplicationService {
           args = `["${params['uidLogin']}",${params['idUsuario']},null]`;
           break;
       }
-      try {
-      } catch (e) {
-        throw new BadRequestException(e.message);
-      }
-
+      const now = Date.now();
+      // Simplified body format - class/method are now in the URL path
       return {
-        type: 2,
-        'func[clss]': constants.LOGIN_FUNC_CLSS,
-        'func[metd]': params['metd'],
         argsLength: args.length,
-        timeInicio: new Date().getTime(),
+        timeInicio: now,
         versaoFront: constants.SCRAPED_FRONT_VERSTION,
-        location: `${constants.SCRAPED_BASE_URL}login`,
-        duplicidade: 0,
+        pageTime: Math.floor(now / 1000),
+        pageLastPing: '0',
+        location: `${constants.SCRAPED_LOGIN_BASE_URL}`,
+        curRetry: '0',
         args: args,
       };
     }
