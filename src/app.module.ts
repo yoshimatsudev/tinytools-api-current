@@ -12,13 +12,25 @@ import { AuthModule } from './modules/auth/auth.module';
 
 const envFilePath: string = getEnvPath(`${__dirname}/..`);
 console.log('Environment file path:', envFilePath);
+
+// Check if running in Docker/production - use process.env directly if no .env file
+const isDocker =
+  process.env.DOCKER_ENV === 'true' || !require('fs').existsSync(envFilePath);
+if (isDocker) {
+  console.log('Running in Docker mode - loading env vars from process.env');
+}
+
 @Module({
   imports: [
     AuthModule,
     ApplicationModule,
     WebModule,
     WebhookModule,
-    ConfigModule.forRoot({ envFilePath, isGlobal: true }),
+    ConfigModule.forRoot({
+      envFilePath: isDocker ? undefined : envFilePath,
+      isGlobal: true,
+      ignoreEnvFile: isDocker, // Don't fail if .env file is missing in Docker
+    }),
     TypeOrmModule.forRootAsync({ useClass: TypeOrmConfigService }),
   ],
   controllers: [],
