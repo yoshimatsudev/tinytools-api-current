@@ -13,7 +13,15 @@ export class TypeOrmConfigService implements TypeOrmOptionsFactory {
     const database = this.config.get<string>('DATABASE_NAME');
     const username = this.config.get<string>('DATABASE_USER');
 
+    const password = this.config.get<string>('DATABASE_PASSWORD');
+
     console.log('Database config:', { host, port, database, username });
+    console.log(
+      'Password configured:',
+      password
+        ? 'YES (length: ' + password.length + ')'
+        : 'NO - PASSWORD IS EMPTY!',
+    );
 
     return {
       type: 'postgres',
@@ -21,7 +29,7 @@ export class TypeOrmConfigService implements TypeOrmOptionsFactory {
       port,
       database,
       username,
-      password: this.config.get<string>('DATABASE_PASSWORD'),
+      password,
       entities: ['dist/**/*.entity.{ts,js}'],
       migrations: ['dist/migrations/*.{ts,js}'],
       migrationsTableName: 'typeorm_migrations',
