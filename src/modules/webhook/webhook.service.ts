@@ -25,7 +25,13 @@ export class WebhookService {
     return crtMap[storeName] || 1; // Default to '1' if store not found
   }
 
-  async testWebhook(id: string, store: string) {
+  async testWebhook(
+    id: string,
+    store: string,
+    dryRun = false,
+    analyzeOnly = false,
+    forceItemRewrite = false,
+  ) {
     const storeName = id.substring(0, 1) === '1' ? 'goldtech' : 'megatech';
     const userKeys = await this.webRepository.getApiKeyAndIdByName(storeName);
 
@@ -34,7 +40,15 @@ export class WebhookService {
     // Determine CRT based on store/account
     const crt = this.getCrtByStore(storeName);
 
-    return await this.startRoutine(id, keys, store, crt);
+    return await this.startRoutine(
+      id,
+      keys,
+      store,
+      crt,
+      dryRun,
+      analyzeOnly,
+      forceItemRewrite,
+    );
   }
 
   async receiveCustomWebhook(
@@ -77,13 +91,16 @@ export class WebhookService {
     userKeys: UserKeysDto,
     store: string,
     crt: number,
+    dryRun = false,
+    analyzeOnly = false,
+    forceItemRewrite = false,
   ): Promise<object> {
     try {
       console.log('Starting routine for -', id);
       // eslint-disable-next-line no-var
       var now = new Date();
       // eslint-disable-next-line no-var
-      var result = {
+      var result: any = {
         time: now.toISOString(),
         status_code: 999,
         message: 'An error has occurred.',
@@ -121,6 +138,8 @@ export class WebhookService {
         );
       }
 
+      const analysis = [];
+
       for (const item of invoice['itemsArray']) {
         // console.log('item =>', item);
 
@@ -128,9 +147,91 @@ export class WebhookService {
           (ref) => ref.sku === item.codigo && ref.isActive === true,
         );
 
+        const expectedStorePrice =
+          store === 'mercado'
+            ? reference?.mercadoPrice
+            : store === 'shopee'
+              ? reference?.shopeePrice
+              : store === 'aliexpress'
+                ? reference?.aliPrice
+                : store === 'shein'
+                  ? reference?.sheinPrice
+                  : store === 'tiktok'
+                    ? reference?.tiktokPrice
+                    : undefined;
+
+        const storeActive =
+          store === 'mercado'
+            ? reference?.mercadoActive
+            : store === 'shopee'
+              ? reference?.shopeeActive
+              : store === 'aliexpress'
+                ? reference?.aliActive
+                : store === 'shein'
+                  ? reference?.sheinActive
+                  : store === 'tiktok'
+                    ? reference?.tiktokActive
+                    : false;
+
+        if (analyzeOnly) {
+          const analysisEntry: any = {
+            itemId: item.id,
+            sku: item.codigo,
+            descricao: item.descricao,
+            quantidade: item.quantidade,
+            currentPrice: item.valorUnitario,
+            currentTotal: item.valorTotal,
+            referenceFound: !!reference,
+            storeActive: !!storeActive,
+            basePrice: reference?.price,
+            expectedStorePrice,
+            shouldChangeByBasePrice: !!reference && item.valorUnitario !== reference.price,
+            shouldChangeByStorePrice:
+              expectedStorePrice !== undefined && item.valorUnitario !== expectedStorePrice,
+          };
+
+          if (reference && expectedStorePrice !== undefined) {
+            try {
+              const tempItem = await this.applicationFacade.getTempItem(
+                id,
+                item.id,
+                userKeys.userId,
+              );
+              const tempItemRaw = await this.applicationFacade.getTempItemRaw(
+                id,
+                item.id,
+                userKeys.userId,
+              );
+
+              const tempItemAny: any = tempItem;
+              analysisEntry.tempItemKeys = Object.keys(tempItemAny || {});
+              analysisEntry.tempItemICMS = tempItemAny?.ICMS;
+              analysisEntry.tempItemIBSCBS = tempItemAny?.IBS_CBS;
+              analysisEntry.tempItemCBS = tempItemAny?.CBS;
+              analysisEntry.tempItemIBSUF = tempItemAny?.IBS_UF;
+              analysisEntry.tempItemIBSMUN = tempItemAny?.IBS_MUN;
+              analysisEntry.tempItemIBSCBSTribRegular =
+                tempItemAny?.IBS_CBS_TRIB_REGULAR;
+              analysisEntry.tempItemRawSample = tempItemRaw?.substring(0, 3000);
+              analysisEntry.tempItemRawTailSample =
+                tempItemRaw?.length > 3000
+                  ? tempItemRaw.substring(Math.max(0, tempItemRaw.length - 3000))
+                  : tempItemRaw;
+            } catch (error) {
+              analysisEntry.tempItemError = error.message;
+            }
+          }
+
+          analysis.push(analysisEntry);
+        }
+
         // console.log(reference, 'different prices for this ref');
 
-        if (reference && item.valorUnitario !== reference.price) {
+        if (
+          !analyzeOnly &&
+          reference &&
+          (item.valorUnitario !== reference.price || forceItemRewrite)
+        ) {
           // console.log('different prices');
           const tempItem = await this.applicationFacade.getTempItem(
             id,
@@ -140,6 +241,16 @@ export class WebhookService {
 
           // console.log(tempItem);
 
+          console.log('Item rewrite decision', {
+            invoiceId: id,
+            itemId: item.id,
+            sku: item.codigo,
+            currentPrice: item.valorUnitario,
+            basePrice: reference.price,
+            forceItemRewrite,
+            store,
+          });
+
           if (store === 'mercado' && reference.mercadoActive) {
             await this.applicationFacade.addTempItem(
               id,
@@ -148,6 +259,7 @@ export class WebhookService {
               reference.mercadoPrice,
               tempItem,
               userKeys.userId,
+              { crt: invoice['crt'], natureza: invoice['natureza'], store },
             );
           } else if (store === 'shopee' && reference.shopeeActive) {
             await this.applicationFacade.addTempItem(
@@ -157,6 +269,7 @@ export class WebhookService {
               reference.shopeePrice,
               tempItem,
               userKeys.userId,
+              { crt: invoice['crt'], natureza: invoice['natureza'], store },
             );
 
             console.log('caiu no shopee');
@@ -168,6 +281,7 @@ export class WebhookService {
               reference.aliPrice,
               tempItem,
               userKeys.userId,
+              { crt: invoice['crt'], natureza: invoice['natureza'], store },
             );
           } else if (store === 'shein' && reference.sheinActive) {
             await this.applicationFacade.addTempItem(
@@ -177,6 +291,7 @@ export class WebhookService {
               reference.sheinPrice,
               tempItem,
               userKeys.userId,
+              { crt: invoice['crt'], natureza: invoice['natureza'], store },
             );
           } else if (store === 'tiktok' && reference.tiktokActive) {
             await this.applicationFacade.addTempItem(
@@ -186,6 +301,7 @@ export class WebhookService {
               reference.tiktokPrice,
               tempItem,
               userKeys.userId,
+              { crt: invoice['crt'], natureza: invoice['natureza'], store },
             );
           }
 
@@ -194,6 +310,24 @@ export class WebhookService {
       }
 
       console.log(changedInvoice, '<= changedInvoice');
+
+      if (analyzeOnly) {
+        return {
+          time: now.toISOString(),
+          status_code: 200,
+          message: `Invoice ${id} analyzed without changes.`,
+          analyzeOnly: true,
+          changedInvoice,
+          analysis,
+          invoiceSummary: {
+            id: invoice['id'],
+            numero: invoice['numero'],
+            valorProdutos: invoice['valorProdutos'],
+            valorNota: invoice['valorNota'],
+            situacao: invoice['situacao'],
+          },
+        };
+      }
 
       if (true) {
         // Update items operation (Natureza da Operacao)
@@ -227,6 +361,24 @@ export class WebhookService {
         await this.applicationFacade.addInvoice(id, new AddInvoiceDto(invoice, crt), userKeys.userId);
 
         // console.log(new AddInvoiceDto(invoice, crt), 'invoice invoice invoice');
+
+        if (dryRun) {
+          const finalInvoice = await this.applicationFacade.searchInvoice(
+            id,
+            userKeys.userId,
+          );
+
+          result = {
+            ...result,
+            status_code: 200,
+            message: 'Invoice ' + id + ' processed in dryRun mode.',
+            dryRun: true,
+            changedInvoice,
+            finalInvoice,
+          };
+          console.log(result);
+          return result;
+        }
 
         await this.applicationFacade.sendInvoice(
           userKeys.apiKey,
