@@ -72,6 +72,13 @@ export class ApplicationFacade {
         const redirectMatch = responseSrc.match(/replace\([^,]+,\s*['"]([^'"]+)['"]/);
         if (redirectMatch && redirectMatch[1]) {
           const targetDomain = redirectMatch[1];
+
+          // erp.olist.com is part of the normal auth flow for this account setup.
+          // Treat it like an expired/invalid session so the caller can refresh cookie and retry.
+          if (targetDomain.includes('erp.olist.com')) {
+            throw new UnauthorizedException('invalid cookie');
+          }
+
           throw new BadRequestException(
             `Invoice ${id} is on a different domain (${targetDomain}). ` +
             `This invoice may belong to a different account or the domain configuration needs to be updated.`
@@ -134,6 +141,31 @@ export class ApplicationFacade {
     return this.mapObject(response, constants.TEMP_ITEM_PREFIX);
   }
 
+  async getTempItemRaw(id: string, itemId: string, userId: number): Promise<string> {
+    const response = await this.applicationService.sendBRequest(
+      {
+        func: constants.GET_TEMP_ITEM_FUNC,
+        invoiceId: id,
+        itemId: itemId,
+      },
+      constants.SCRAPED_INVOICE_ENDPOINT,
+      userId,
+    );
+
+    const props = response?.response || [];
+    for (const element of props) {
+      if (
+        element['cmd'] === 'sc' &&
+        element['src'] &&
+        element['src'].includes(constants.TEMP_ITEM_PREFIX)
+      ) {
+        return element['src'];
+      }
+    }
+
+    return JSON.stringify(response);
+  }
+
   async addTempItem(
     id: string,
     itemId: string,
@@ -141,14 +173,44 @@ export class ApplicationFacade {
     newPrice: string,
     tempItem: object,
     userId: number,
+    invoiceContext?: { crt?: string; natureza?: string; store?: string },
   ): Promise<object> {
+    console.log('addTempItem payload before update', {
+      invoiceId: id,
+      itemId,
+      tempInvoiceId,
+      newPrice,
+      quantidade: tempItem['quantidade'],
+      quantidadeItem: tempItem['quantidadeItem'],
+      keys: Object.keys(tempItem || {}),
+    });
+
+    const itemQuantity =
+      tempItem['quantidade'] ?? tempItem['quantidadeItem'] ?? '1';
+
     tempItem['base_comissao'] = newPrice;
     tempItem['valorUnitario'] = newPrice;
     tempItem['valorTotal'] = this.getTotalPrice(
       newPrice,
-      tempItem['quantidade'],
+      itemQuantity,
       'multiply',
     );
+
+    const taxReformNormalization = this.normalizeTaxReformFields(
+      tempItem,
+      invoiceContext,
+    );
+
+    console.log('addTempItem tax reform normalization', {
+      invoiceId: id,
+      itemId,
+      ...taxReformNormalization,
+      payloadIBSCBS: tempItem['IBS_CBS'],
+      payloadIBSCBSTribRegular: tempItem['IBS_CBS_TRIB_REGULAR'],
+      payloadCBS: tempItem['CBS'],
+      payloadIBSUF: tempItem['IBS_UF'],
+      payloadIBSMUN: tempItem['IBS_MUN'],
+    });
 
     // console.log('Adding temp item -', id);
 
@@ -195,7 +257,7 @@ export class ApplicationFacade {
     invoice.valorAproximadoImpostosTotal = taxes.valorAproximadoImpostosTotal || '0,00';
     invoice.obsSistema = taxes.obsSistema || '';
 
-    // Update ICMS fields from tax calculation if available
+    // Update tax fields from tax calculation if available
     if (taxes.valorICMS) invoice.valorICMS = taxes.valorICMS;
     if (taxes.baseICMS) invoice.baseICMS = taxes.baseICMS;
     if (taxes.valorTotalFCP) invoice.valorTotalFCP = taxes.valorTotalFCP;
@@ -204,6 +266,30 @@ export class ApplicationFacade {
     if (taxes.valorTotalICMSPartilhaDestino) invoice.valorTotalICMSPartilhaDestino = taxes.valorTotalICMSPartilhaDestino;
     if (taxes.valorTotalICMSPartilhaOrigem) invoice.valorTotalICMSPartilhaOrigem = taxes.valorTotalICMSPartilhaOrigem;
     if (taxes.percentualICMSPartilhaDestino) invoice.percentualICMSPartilhaDestino = taxes.percentualICMSPartilhaDestino;
+
+    // Reforma tributária / IBS-CBS totals
+    if (taxes.valorTotalBCIBSCBS) invoice.valorTotalBCIBSCBS = taxes.valorTotalBCIBSCBS;
+    if (taxes.valorTotalIS) invoice.valorTotalIS = taxes.valorTotalIS;
+    if (taxes.valorDiferimentoIBSUF) invoice.valorDiferimentoIBSUF = taxes.valorDiferimentoIBSUF;
+    if (taxes.valorDevolucaoIBSUF) invoice.valorDevolucaoIBSUF = taxes.valorDevolucaoIBSUF;
+    if (taxes.valorTotalIBSUF) invoice.valorTotalIBSUF = taxes.valorTotalIBSUF;
+    if (taxes.valorDiferimentoIBSMun) invoice.valorDiferimentoIBSMun = taxes.valorDiferimentoIBSMun;
+    if (taxes.valorDevolucaoIBSMun) invoice.valorDevolucaoIBSMun = taxes.valorDevolucaoIBSMun;
+    if (taxes.valorTotalIBSMun) invoice.valorTotalIBSMun = taxes.valorTotalIBSMun;
+    if (taxes.valorTotalIBS) invoice.valorTotalIBS = taxes.valorTotalIBS;
+    if (taxes.valorCredPresIBS) invoice.valorCredPresIBS = taxes.valorCredPresIBS;
+    if (taxes.valorCredPresSusIBS) invoice.valorCredPresSusIBS = taxes.valorCredPresSusIBS;
+    if (taxes.valorDiferimentoCBS) invoice.valorDiferimentoCBS = taxes.valorDiferimentoCBS;
+    if (taxes.valorDevolucaoCBS) invoice.valorDevolucaoCBS = taxes.valorDevolucaoCBS;
+    if (taxes.valorTotalCBS) invoice.valorTotalCBS = taxes.valorTotalCBS;
+    if (taxes.valorCredPresCBS) invoice.valorCredPresCBS = taxes.valorCredPresCBS;
+    if (taxes.valorCredPresSusCBS) invoice.valorCredPresSusCBS = taxes.valorCredPresSusCBS;
+    if (taxes.valorIBSMono) invoice.valorIBSMono = taxes.valorIBSMono;
+    if (taxes.valorCBSMono) invoice.valorCBSMono = taxes.valorCBSMono;
+    if (taxes.valorIBSMonoReten) invoice.valorIBSMonoReten = taxes.valorIBSMonoReten;
+    if (taxes.valorCBSMonoReten) invoice.valorCBSMonoReten = taxes.valorCBSMonoReten;
+    if (taxes.valorIBSMonoRet) invoice.valorIBSMonoRet = taxes.valorIBSMonoRet;
+    if (taxes.valorCBSMonoRet) invoice.valorCBSMonoRet = taxes.valorCBSMonoRet;
 
     try {
       console.log('About to save invoice with these ICMS values:', {
@@ -491,13 +577,198 @@ export class ApplicationFacade {
     return mappedResponse;
   }
 
+  private normalizeTaxReformFields(
+    tempItem: any,
+    invoiceContext?: { crt?: string; natureza?: string; store?: string },
+  ) {
+    const crt = invoiceContext?.crt?.toString?.() ?? '';
+    const natureza = (
+      invoiceContext?.natureza ??
+      tempItem?.natureza ??
+      ''
+    ).toString();
+
+    const isRegimeNormal =
+      crt === '3' || natureza.toLowerCase().includes('regime normal');
+
+    const existingIbsCbs =
+      tempItem?.IBS_CBS && typeof tempItem.IBS_CBS === 'object'
+        ? { ...tempItem.IBS_CBS }
+        : null;
+
+    const previousCST = existingIbsCbs?.CST;
+    const previousCClassTrib = existingIbsCbs?.cClassTrib;
+
+    if (!isRegimeNormal) {
+      return {
+        appliedFallback: false,
+        skippedReason: 'non-regime-normal',
+        crt,
+        natureza,
+        previousCST,
+        previousCClassTrib,
+      };
+    }
+
+    const normalizedCST =
+      typeof previousCST === 'string' && /^\d{3}$/.test(previousCST)
+        ? previousCST
+        : '000';
+    const normalizedCClassTrib =
+      typeof previousCClassTrib === 'string' && /^\d{6}$/.test(previousCClassTrib)
+        ? previousCClassTrib
+        : '000001';
+
+    tempItem.IBS_CBS = {
+      ...(existingIbsCbs ?? {}),
+      CST: normalizedCST,
+      cClassTrib: normalizedCClassTrib,
+    };
+
+    const existingIbsCbsTribRegular =
+      tempItem?.IBS_CBS_TRIB_REGULAR &&
+      typeof tempItem.IBS_CBS_TRIB_REGULAR === 'object'
+        ? { ...tempItem.IBS_CBS_TRIB_REGULAR }
+        : null;
+
+    const previousTribRegularCST = existingIbsCbsTribRegular?.CST;
+    const previousTribRegularCClassTrib =
+      existingIbsCbsTribRegular?.cClassTrib;
+
+    tempItem.IBS_CBS_TRIB_REGULAR = {
+      ...(existingIbsCbsTribRegular ?? {}),
+      CST:
+        typeof previousTribRegularCST === 'string' &&
+        /^\d{3}$/.test(previousTribRegularCST)
+          ? previousTribRegularCST
+          : normalizedCST,
+      cClassTrib:
+        typeof previousTribRegularCClassTrib === 'string' &&
+        /^\d{6}$/.test(previousTribRegularCClassTrib)
+          ? previousTribRegularCClassTrib
+          : normalizedCClassTrib,
+    };
+
+    const ibsCbsBase = Number(tempItem?.IBS_CBS?.edValorBCIbsCbs ?? 0);
+    const existingCBS =
+      tempItem?.CBS && typeof tempItem.CBS === 'object' ? { ...tempItem.CBS } : {};
+    const existingIBSUF =
+      tempItem?.IBS_UF && typeof tempItem.IBS_UF === 'object'
+        ? { ...tempItem.IBS_UF }
+        : {};
+    const existingIBSMUN =
+      tempItem?.IBS_MUN && typeof tempItem.IBS_MUN === 'object'
+        ? { ...tempItem.IBS_MUN }
+        : {};
+
+    const shouldApplyAliqFallback =
+      ibsCbsBase > 0 &&
+      Number(existingCBS?.cbs_aliqCbs ?? 0) === 0 &&
+      Number(existingIBSUF?.ibsuf_aliqIbsUf ?? 0) === 0;
+
+    if (shouldApplyAliqFallback) {
+      const cbsAliq = 0.9;
+      const ibsUfAliq = 0.1;
+      const ibsMunAliq = Number(existingIBSMUN?.ibsmun_aliqIbsMun ?? 0);
+      const cbsValorImposto = Number(((ibsCbsBase * cbsAliq) / 100).toFixed(2));
+      const ibsUfValorImposto = Number(((ibsCbsBase * ibsUfAliq) / 100).toFixed(2));
+      const ibsMunValorImposto = Number(((ibsCbsBase * ibsMunAliq) / 100).toFixed(2));
+
+      tempItem.CBS = {
+        ...existingCBS,
+        cbs_aliqCbs: cbsAliq,
+        cbs_aliqDiferimento: Number(existingCBS?.cbs_aliqDiferimento ?? 0),
+        cbs_percentRedAliq: Number(existingCBS?.cbs_percentRedAliq ?? 0),
+        cbs_aliqEfetiva: Number(existingCBS?.cbs_aliqEfetiva ?? 0),
+        cbs_valorImposto: cbsValorImposto,
+      };
+
+      tempItem.IBS_UF = {
+        ...existingIBSUF,
+        ibsuf_aliqIbsUf: ibsUfAliq,
+        ibsuf_aliqDiferimento: Number(existingIBSUF?.ibsuf_aliqDiferimento ?? 0),
+        ibsuf_percentRedAliq: Number(existingIBSUF?.ibsuf_percentRedAliq ?? 0),
+        ibsuf_aliqEfetiva: Number(existingIBSUF?.ibsuf_aliqEfetiva ?? 0),
+        ibsuf_valorImposto: ibsUfValorImposto,
+      };
+
+      tempItem.IBS_MUN = {
+        ...existingIBSMUN,
+        ibsmun_aliqIbsMun: ibsMunAliq,
+        ibsmun_aliqDiferimento: Number(existingIBSMUN?.ibsmun_aliqDiferimento ?? 0),
+        ibsmun_percentRedAliq: Number(existingIBSMUN?.ibsmun_percentRedAliq ?? 0),
+        ibsmun_aliqEfetiva: Number(existingIBSMUN?.ibsmun_aliqEfetiva ?? 0),
+        ibsmun_valorImposto: ibsMunValorImposto,
+      };
+
+      tempItem.IBS_CBS_TRIB_REGULAR = {
+        ...tempItem.IBS_CBS_TRIB_REGULAR,
+        tribregular_aliqIbsUf: ibsUfAliq,
+        tribregular_percentRedAliqIbsUf: Number(
+          tempItem.IBS_CBS_TRIB_REGULAR?.tribregular_percentRedAliqIbsUf ?? 0,
+        ),
+        tribregular_aliqEfetivaIbsUf: Number(
+          tempItem.IBS_CBS_TRIB_REGULAR?.tribregular_aliqEfetivaIbsUf ?? 0,
+        ),
+        tribregular_valorImpostoIbsUf: ibsUfValorImposto,
+        tribregular_aliqIbsMun: ibsMunAliq,
+        tribregular_percentRedAliqIbsMun: Number(
+          tempItem.IBS_CBS_TRIB_REGULAR?.tribregular_percentRedAliqIbsMun ?? 0,
+        ),
+        tribregular_aliqEfetivaIbsMun: Number(
+          tempItem.IBS_CBS_TRIB_REGULAR?.tribregular_aliqEfetivaIbsMun ?? 0,
+        ),
+        tribregular_valorImpostoIbsMun: ibsMunValorImposto,
+        tribregular_aliqCbs: cbsAliq,
+        tribregular_percentRedAliqCbs: Number(
+          tempItem.IBS_CBS_TRIB_REGULAR?.tribregular_percentRedAliqCbs ?? 0,
+        ),
+        tribregular_aliqEfetivaCbs: Number(
+          tempItem.IBS_CBS_TRIB_REGULAR?.tribregular_aliqEfetivaCbs ?? 0,
+        ),
+        tribregular_valorImpostoCbs: cbsValorImposto,
+      };
+    }
+
+    return {
+      appliedFallback:
+        normalizedCST !== previousCST ||
+        normalizedCClassTrib !== previousCClassTrib ||
+        !existingIbsCbs ||
+        tempItem.IBS_CBS_TRIB_REGULAR.CST !== previousTribRegularCST ||
+        tempItem.IBS_CBS_TRIB_REGULAR.cClassTrib !== previousTribRegularCClassTrib ||
+        !existingIbsCbsTribRegular,
+      skippedReason: null,
+      crt,
+      natureza,
+      previousCST,
+      previousCClassTrib,
+      nextCST: normalizedCST,
+      nextCClassTrib: normalizedCClassTrib,
+      createdIBSCBSBlock: !existingIbsCbs,
+      previousTribRegularCST,
+      previousTribRegularCClassTrib,
+      nextTribRegularCST: tempItem.IBS_CBS_TRIB_REGULAR.CST,
+      nextTribRegularCClassTrib: tempItem.IBS_CBS_TRIB_REGULAR.cClassTrib,
+      createdIBSCBSTribRegularBlock: !existingIbsCbsTribRegular,
+      ibsCbsBase,
+      shouldApplyAliqFallback,
+      nextCBS: tempItem.CBS,
+      nextIBSUF: tempItem.IBS_UF,
+      nextIBSMUN: tempItem.IBS_MUN,
+    };
+  }
+
   private getTotalPrice(
     firstElement: string,
     secondElement: string,
     operator: string,
   ) {
-    const _firstElement = parseFloat(firstElement.replace(',', '.'));
-    const _secondElement = parseFloat(secondElement.replace(',', '.'));
+    const normalizedFirstElement = (firstElement ?? '0').toString();
+    const normalizedSecondElement = (secondElement ?? '0').toString();
+
+    const _firstElement = parseFloat(normalizedFirstElement.replace(',', '.'));
+    const _secondElement = parseFloat(normalizedSecondElement.replace(',', '.'));
     let _result = 0;
     switch (operator) {
       case 'multiply':
@@ -532,10 +803,13 @@ export class ApplicationFacade {
               // Log error but don't set itemsArray - let calling code handle it
               console.error(`Error parsing itemsArray: ${error.message}`);
             }
-          } else if (
-            prefix == constants.TEMP_ITEM_PREFIX ||
-            prefix == constants.SENT_TEMP_ITEM_PREFIX
-          ) {
+          } else if (prefix == constants.TEMP_ITEM_PREFIX) {
+            const parsedObj = this.parseFunctionObjectArgs(
+              element['src'],
+              constants.TEMP_ITEM_PREFIX,
+            );
+            result = parsedObj;
+          } else if (prefix == constants.SENT_TEMP_ITEM_PREFIX) {
             const parsedSrc = this.parseNestedBraces(element['src']);
             const parsedObj = JSON.parse(
               unescape(parsedSrc[parsedSrc.length - 1]),
@@ -551,6 +825,99 @@ export class ApplicationFacade {
     });
 
     return result;
+  }
+
+  private parseFunctionObjectArgs(text: string, prefix: string) {
+    const args = this.parseFunctionArgs(text, prefix);
+    const parsedObjects = args
+      .map((arg) => arg.trim())
+      .filter((arg) => arg.startsWith('{') && arg.endsWith('}'))
+      .map((arg) => JSON.parse(unescape(arg)));
+
+    if (parsedObjects.length === 0) {
+      throw new Error(`Could not find object arguments for ${prefix}`);
+    }
+
+    return parsedObjects.reduce((accumulator, current) => {
+      return { ...accumulator, ...current };
+    }, {});
+  }
+
+  private parseFunctionArgs(text: string, prefix: string): string[] {
+    const prefixIndex = text.indexOf(prefix);
+    if (prefixIndex === -1) {
+      throw new Error(`Could not find prefix ${prefix} in text`);
+    }
+
+    const openParenIndex = text.indexOf('(', prefixIndex);
+    if (openParenIndex === -1) {
+      throw new Error(`Could not find opening parenthesis for ${prefix}`);
+    }
+
+    const args: string[] = [];
+    let currentArg = '';
+    let depthBraces = 0;
+    let depthBrackets = 0;
+    let depthParens = 0;
+    let inString = false;
+    let escaping = false;
+
+    for (let i = openParenIndex + 1; i < text.length; i++) {
+      const char = text[i];
+
+      if (escaping) {
+        currentArg += char;
+        escaping = false;
+        continue;
+      }
+
+      if (char === '\\') {
+        currentArg += char;
+        escaping = true;
+        continue;
+      }
+
+      if (char === '"') {
+        currentArg += char;
+        inString = !inString;
+        continue;
+      }
+
+      if (inString) {
+        currentArg += char;
+        continue;
+      }
+
+      if (char === '{') depthBraces++;
+      else if (char === '}') depthBraces--;
+      else if (char === '[') depthBrackets++;
+      else if (char === ']') depthBrackets--;
+      else if (char === '(') depthParens++;
+      else if (char === ')') {
+        if (depthBraces === 0 && depthBrackets === 0 && depthParens === 0) {
+          if (currentArg.trim()) {
+            args.push(currentArg.trim());
+          }
+          return args;
+        }
+        depthParens--;
+      }
+
+      if (
+        char === ',' &&
+        depthBraces === 0 &&
+        depthBrackets === 0 &&
+        depthParens === 0
+      ) {
+        args.push(currentArg.trim());
+        currentArg = '';
+        continue;
+      }
+
+      currentArg += char;
+    }
+
+    throw new Error(`Could not find closing parenthesis for ${prefix}`);
   }
 
   private parseNestedArray(text) {

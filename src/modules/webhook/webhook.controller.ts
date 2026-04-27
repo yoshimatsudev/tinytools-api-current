@@ -39,9 +39,21 @@ export class WebhookController {
 
   @HttpCode(200)
   @Get('startRoutine')
-  async start_routine(@Query('id') id: string, @Query('store') store: string) {
-    const response = await this.webhookService.testWebhook(id, store);
+  async start_routine(
+    @Query('id') id: string,
+    @Query('store') store: string,
+    @Query('dryRun') dryRun?: string,
+    @Query('analyzeOnly') analyzeOnly?: string,
+    @Query('forceItemRewrite') forceItemRewrite?: string,
+  ) {
+    const response = await this.webhookService.testWebhook(
+      id,
+      store,
+      dryRun === 'true',
+      analyzeOnly === 'true',
+      forceItemRewrite === 'true',
+    );
 
-    return 'webhook received';
+    return response;
   }
 }

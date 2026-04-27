@@ -497,6 +497,50 @@ export class AddInvoiceDto {
   @ApiProperty()
   valorTotalICMSPartilhaOrigem: string;
   @ApiProperty()
+  valorTotalBCIBSCBS: string;
+  @ApiProperty()
+  valorTotalIS: string;
+  @ApiProperty()
+  valorDiferimentoIBSUF: string;
+  @ApiProperty()
+  valorDevolucaoIBSUF: string;
+  @ApiProperty()
+  valorTotalIBSUF: string;
+  @ApiProperty()
+  valorDiferimentoIBSMun: string;
+  @ApiProperty()
+  valorDevolucaoIBSMun: string;
+  @ApiProperty()
+  valorTotalIBSMun: string;
+  @ApiProperty()
+  valorTotalIBS: string;
+  @ApiProperty()
+  valorCredPresIBS: string;
+  @ApiProperty()
+  valorCredPresSusIBS: string;
+  @ApiProperty()
+  valorDiferimentoCBS: string;
+  @ApiProperty()
+  valorDevolucaoCBS: string;
+  @ApiProperty()
+  valorTotalCBS: string;
+  @ApiProperty()
+  valorCredPresCBS: string;
+  @ApiProperty()
+  valorCredPresSusCBS: string;
+  @ApiProperty()
+  valorIBSMono: string;
+  @ApiProperty()
+  valorCBSMono: string;
+  @ApiProperty()
+  valorIBSMonoReten: string;
+  @ApiProperty()
+  valorCBSMonoReten: string;
+  @ApiProperty()
+  valorIBSMonoRet: string;
+  @ApiProperty()
+  valorCBSMonoRet: string;
+  @ApiProperty()
   valorUnitarioComII: string;
   @ApiProperty()
   zonaFrancaManaus: string;
