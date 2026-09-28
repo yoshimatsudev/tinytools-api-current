@@ -461,14 +461,26 @@ export class ApplicationService {
             `true,[],"S"]`;
           break;
         case constants.CALC_TAXES_FUNC:
-          args = `[-1,"I","${params['tempInvoiceId']}", null, null, null]`;
+          args = JSON.stringify([
+            -1,
+            params['forceDiscountAllocation'] ? 'N' : 'I',
+            params['tempInvoiceId'],
+            null,
+            null,
+            params['forceDiscountAllocation'] ? true : null,
+          ]);
           break;
         case constants.UPDATE_ITEMS_OPERATION_FUNC:
           args = `["${params['tempInvoiceId']}","${params['operationId']}","${params['operationName']}","S","${params['operationId']}",null,"0"]`;
           console.log(args, '<= args');
           break;
         case constants.UPDATE_INVOICE_FIELD_FUNC:
-          args = `["${params['tempInvoiceId']}","${params['fieldName']}","${params['fieldValue']}",null]`;
+          args = JSON.stringify([
+            params['tempInvoiceId'],
+            params['fieldName'],
+            params['fieldValue'],
+            params['calculateTaxes'],
+          ]);
           break;
       }
 
