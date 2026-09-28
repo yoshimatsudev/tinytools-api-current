@@ -64,6 +64,14 @@ do item R$ 1,50 → R$ 0,00; total R$ 12,48 → R$ 2,00. Nova consulta confirmou
 os valores persistidos e situação pendente (`1`), sem emissão. A chamada real
 de `sendInvoices` ao webhook local retornou HTTP 200; regras de preço inalteradas.
 
+Teste completo posterior, com autorização explícita para emissão real:
+nota pendente Megatech/TikTok com 2 unidades, preço R$ 22,49 → R$ 4,00 por
+unidade conforme o banco, desconto R$ 3,00 → R$ 0,00 e total R$ 41,98 → R$ 8,00.
+`sendInvoices` → webhook local → salvamento/rateio → API oficial de emissão:
+retorno `status: OK`, situação autorizada (`6`) e chave de acesso presente.
+Uma nova consulta confirmou autorização e valores persistidos. Uma chamada
+de emissão, sem envio de e-mail; nenhuma alteração das regras de preço.
+
 `dryRun` do webhook **salva alterações na nota**, apenas não emite.
 
 Regressão: `npm test -- --runInBand` cobre rateio, recálculo, bloqueio do
