@@ -230,30 +230,39 @@ export class ApplicationFacade {
   }
 
   async addInvoice(id: string, invoice: AddInvoiceDto, userId: number): Promise<object> {
-    // console.log('Adding temp item -', id);
+    // Equivalent to confirming "Rateio de valores" in Tiny. Updating only the
+    // final invoice payload leaves discounts allocated on the temporary items.
+    const discountResponse = await this.applicationService.sendBRequest(
+      {
+        func: constants.UPDATE_INVOICE_FIELD_FUNC,
+        invoiceId: id,
+        tempInvoiceId: invoice.idNotaTmp,
+        fieldName: 'desconto',
+        fieldValue: '0,00',
+        calculateTaxes: 'S',
+      },
+      constants.SCRAPED_INVOICE_ENDPOINT,
+      userId,
+    );
+    const discountResult = this.mapObject(discountResponse, null);
+    if ('error' in discountResult) {
+      throw new BadRequestException(discountResult['error']);
+    }
 
-    // Calculate taxes with error handling
-    let taxes;
-    try {
-      taxes = await this.calcTax(id, invoice.idNotaTmp, userId);
-      if (!taxes) {
-        throw new Error('Tax calculation returned null or undefined');
-      }
-    } catch (error) {
-      console.error('Tax calculation failed:', error.message);
-      // Continue with default values if tax calculation fails
-      taxes = {
-        valorProdutos: invoice.valorProdutos || '0,00',
-        valorAproximadoImpostosTotal: '0,00',
-        obsSistema: ''
-      };
+    // Tiny's discount callback forces allocation before recalculating taxes.
+    // Do not save using stale totals if this required step fails.
+    const taxes = await this.calcTax(id, invoice.idNotaTmp, userId, true);
+    if (!taxes?.valorProdutos || 'error' in taxes) {
+      throw new BadRequestException(
+        taxes?.['error'] || 'Tax calculation returned no result',
+      );
     }
 
     invoice.desconto = '0,00';
     invoice.valorDesconto = '0,00';
-    invoice.valorProdutos = taxes.valorProdutos || '0,00';
-    invoice.totalFaturado = taxes.valorProdutos || '0,00';
-    invoice.valorNota = taxes.valorProdutos || '0,00';
+    invoice.valorProdutos = taxes.valorProdutos;
+    invoice.totalFaturado = taxes.valorProdutos;
+    invoice.valorNota = taxes.valorProdutos;
     invoice.valorAproximadoImpostosTotal = taxes.valorAproximadoImpostosTotal || '0,00';
     invoice.obsSistema = taxes.obsSistema || '';
 
@@ -470,13 +479,19 @@ export class ApplicationFacade {
     return response;
   }
 
-  async calcTax(id: string, tempInvoiceId: string, userId: number): Promise<object> {
+  async calcTax(
+    id: string,
+    tempInvoiceId: string,
+    userId: number,
+    forceDiscountAllocation = false,
+  ): Promise<Partial<AddInvoiceDto> & { error?: string }> {
     // console.log('Calculating taxes -', id);
     const response = await this.applicationService.sendBRequest(
       {
         func: constants.CALC_TAXES_FUNC,
         invoiceId: id,
         tempInvoiceId: tempInvoiceId,
+        forceDiscountAllocation,
       },
       constants.SCRAPED_INVOICE_ENDPOINT,
       userId,
@@ -485,7 +500,8 @@ export class ApplicationFacade {
     console.log('calculate taxes response', response);
 
     // Try to get the calculated values from the response
-    const mappedResponse = this.mapObject(response, null) as any;
+    const mappedResponse: Partial<AddInvoiceDto> & { error?: string } =
+      this.mapObject(response, null);
 
     // If mapObject doesn't return proper tax values, try to extract them from the raw response
     if (!mappedResponse.valorProdutos || !mappedResponse.valorICMS) {

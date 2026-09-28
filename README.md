@@ -28,6 +28,47 @@
 
 [Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
 
+### Remoção de desconto das notas
+
+Antes de salvar, `ApplicationFacade.addInvoice` reproduz a confirmação de
+**Rateio de valores** do Tiny:
+
+1. `updateCampoNotaTmpXajax(idNotaTmp, 'desconto', '0,00', 'S')`.
+2. `calcularImpostos(-1, 'N', idNotaTmp, null, null, true)`, forçando o rateio
+   de descontos/acréscimos solicitado pelo callback do Tiny.
+3. Atualização dos totais retornados e salvamento da nota.
+
+Sem o rateio forçado, o Tiny pode salvar o cabeçalho com desconto zero e manter
+os descontos dos itens e a base tributária anterior.
+O aviso **Atualização de valores** é informativo: nesta integração HTTP não há
+um clique em **Fechar** nem uma segunda requisição para dispensá-lo.
+
+Falhas na atualização ou no cálculo obrigatório interrompem o salvamento,
+inclusive respostas sem o total de produtos calculado: não são salvos totais
+antigos nem um total zero de fallback. O endpoint de cálculo avulso mantém seu
+comportamento anterior; o rateio forçado é usado no fluxo de salvamento.
+
+Protocolo verificado no campo de desconto da tela autenticada, no callback
+retornado pelo servidor e nos scripts
+[form.notas.fiscais.js](https://erp.olist.com/templates/form.notas.fiscais.js) e
+[form.nota.fiscal.itens.js](https://erp.olist.com/templates/form.nota.fiscal.itens.js).
+
+Validação real autorizada: Tiny Scrap em execução única → API localhost →
+salvar sem emitir → nova consulta ao Tiny. Na nota testada, os descontos de
+R$ 35,63 e R$ 35,62 dos itens foram removidos; total e base ICMS passaram a
+R$ 100,00, e ICMS a R$ 4,00. Preços unitários não foram alterados.
+
+Segundo teste autorizado em nota pendente Megatech/TikTok, com SKU ativo no banco:
+preço unitário R$ 13,98 → R$ 2,00, conforme `tiktokPrice`; desconto da nota e
+do item R$ 1,50 → R$ 0,00; total R$ 12,48 → R$ 2,00. Nova consulta confirmou
+os valores persistidos e situação pendente (`1`), sem emissão. A chamada real
+de `sendInvoices` ao webhook local retornou HTTP 200; regras de preço inalteradas.
+
+`dryRun` do webhook **salva alterações na nota**, apenas não emite.
+
+Regressão: `npm test -- --runInBand` cobre rateio, recálculo, bloqueio do
+salvamento em falhas e preservação do cálculo avulso. Build: `npm run build`.
+
 ## Installation
 
 ```bash
