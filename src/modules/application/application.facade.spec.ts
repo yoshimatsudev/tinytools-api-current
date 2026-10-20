@@ -16,6 +16,9 @@ describe('invoice discount allocation', () => {
   let savedDiscounts: number[] | undefined;
   let savedTotal: string | undefined;
   let savedTaxBase: string | undefined;
+  let savedBilledTotal: string | undefined;
+  let savedOtherExpenses: string | undefined;
+  let calculatedTotals: Record<string, string>;
   let failure: 'update-http' | 'calculation-rejection' | 'calculation-empty' | undefined;
 
   beforeEach(async () => {
@@ -24,6 +27,13 @@ describe('invoice discount allocation', () => {
     savedDiscounts = undefined;
     savedTotal = undefined;
     savedTaxBase = undefined;
+    savedBilledTotal = undefined;
+    savedOtherExpenses = undefined;
+    calculatedTotals = {
+      valorProdutos: '100,00',
+      valorNota: '100,00',
+      totalFaturado: '100,00',
+    };
     failure = undefined;
     jest.spyOn(console, 'log').mockImplementation(() => {});
     jest.spyOn(console, 'error').mockImplementation(() => {});
@@ -68,7 +78,7 @@ describe('invoice discount allocation', () => {
         }
         const allocated = itemDiscounts.some(discount => discount !== 0);
         response.end(JSON.stringify({ response: [
-          { cmd: 'as', elm: 'valorProdutos', val: '100,00' },
+          ...Object.entries(calculatedTotals).map(([elm, val]) => ({ cmd: 'as', elm, val })),
           { cmd: 'as', elm: 'baseICMS', val: allocated ? '28,75' : '100,00' },
           { cmd: 'as', elm: 'valorICMS', val: allocated ? '1,15' : '4,00' },
         ] }));
@@ -79,6 +89,8 @@ describe('invoice discount allocation', () => {
         savedDiscounts = [...itemDiscounts];
         savedTotal = args[1].valorNota;
         savedTaxBase = args[1].baseICMS;
+        savedBilledTotal = args[1].totalFaturado;
+        savedOtherExpenses = args[1].outrasDespesas;
         response.end(JSON.stringify({ response: [{ cmd: 'rt', val: true }] }));
         return;
       }
@@ -121,6 +133,20 @@ describe('invoice discount allocation', () => {
     expect(savedTaxBase).toBe('100,00');
   });
 
+  it('preserves Tiny calculated totals when other expenses make them differ from products', async () => {
+    // Captured production case: note 277858324 was rejected after 21,75 became 16,00.
+    calculatedTotals = { valorProdutos: '16,00', valorNota: '21,75', totalFaturado: '21,75' };
+    const data = invoice();
+    data.outrasDespesas = '5,75';
+
+    await facade.addInvoice('invoice', data, 4);
+
+    expect(savedTotal).toBe('21,75');
+    expect(savedBilledTotal).toBe('21,75');
+    expect(savedOtherExpenses).toBe('5,75');
+    expect(savedDiscounts).toEqual([0, 0]);
+  });
+
   it('does not save stale totals when Tiny rejects the forced allocation', async () => {
     failure = 'calculation-rejection';
 
@@ -134,6 +160,22 @@ describe('invoice discount allocation', () => {
     await expect(facade.addInvoice('invoice', invoice(), 4)).rejects.toThrow();
     expect(savedDiscounts).toBeUndefined();
     expect(savedTotal).toBeUndefined();
+  });
+
+  it.each(['valorNota', 'totalFaturado'])('does not save if recalculation omits %s', async (field) => {
+    delete calculatedTotals[field];
+
+    await expect(facade.addInvoice('invoice', invoice(), 4)).rejects.toThrow();
+    expect(savedDiscounts).toBeUndefined();
+  });
+
+  it('preserves a billed total that differs from the fiscal total', async () => {
+    calculatedTotals = { valorProdutos: '100,00', valorNota: '112,00', totalFaturado: '107,00' };
+
+    await facade.addInvoice('invoice', invoice(), 4);
+
+    expect(savedTotal).toBe('112,00');
+    expect(savedBilledTotal).toBe('107,00');
   });
 
   it('does not save when the discount update fails over HTTP', async () => {

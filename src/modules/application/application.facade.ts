@@ -252,17 +252,24 @@ export class ApplicationFacade {
     // Tiny's discount callback forces allocation before recalculating taxes.
     // Do not save using stale totals if this required step fails.
     const taxes = await this.calcTax(id, invoice.idNotaTmp, userId, true);
-    if (!taxes?.valorProdutos || 'error' in taxes) {
+    if (
+      !taxes?.valorProdutos ||
+      !taxes.valorNota ||
+      !taxes.totalFaturado ||
+      'error' in taxes
+    ) {
       throw new BadRequestException(
-        taxes?.['error'] || 'Tax calculation returned no result',
+        taxes?.['error'] || 'Tax calculation returned incomplete invoice totals',
       );
     }
 
     invoice.desconto = '0,00';
     invoice.valorDesconto = '0,00';
     invoice.valorProdutos = taxes.valorProdutos;
-    invoice.totalFaturado = taxes.valorProdutos;
-    invoice.valorNota = taxes.valorProdutos;
+    // Tiny includes freight, other expenses and applicable taxes in these totals.
+    // They are not necessarily equal to the product subtotal.
+    invoice.totalFaturado = taxes.totalFaturado;
+    invoice.valorNota = taxes.valorNota;
     invoice.valorAproximadoImpostosTotal = taxes.valorAproximadoImpostosTotal || '0,00';
     invoice.obsSistema = taxes.obsSistema || '';
 

@@ -44,8 +44,11 @@ O aviso **Atualização de valores** é informativo: nesta integração HTTP nã
 um clique em **Fechar** nem uma segunda requisição para dispensá-lo.
 
 Falhas na atualização ou no cálculo obrigatório interrompem o salvamento,
-inclusive respostas sem o total de produtos calculado: não são salvos totais
-antigos nem um total zero de fallback. O endpoint de cálculo avulso mantém seu
+inclusive respostas sem `valorProdutos`, `valorNota` ou `totalFaturado` calculados:
+não são salvos totais antigos nem um total zero de fallback. `valorNota` e
+`totalFaturado` preservam os respectivos valores retornados pelo Tiny; não são
+substituídos pelo subtotal de produtos, que pode excluir despesas, frete e tributos.
+O endpoint de cálculo avulso mantém seu
 comportamento anterior; o rateio forçado é usado no fluxo de salvamento.
 
 Protocolo verificado no campo de desconto da tela autenticada, no callback
@@ -74,8 +77,16 @@ de emissão, sem envio de e-mail; nenhuma alteração das regras de preço.
 
 `dryRun` do webhook **salva alterações na nota**, apenas não emite.
 
-Regressão: `npm test -- --runInBand` cobre rateio, recálculo, bloqueio do
-salvamento em falhas e preservação do cálculo avulso. Build: `npm run build`.
+Validação de totais em 20/10/2026: teste autorizado de salvamento sem emissão
+em uma nota pendente Megatech/TikTok. A rotina aplicou os preços já cadastrados
+(R$ 24,00 e R$ 8,00), zerou o desconto e preservou R$ 14,32 de outras despesas.
+A releitura pela API oficial confirmou produtos de R$ 32,00, total e faturado
+de R$ 46,32, situação pendente e ausência de chave de acesso. O teste isolado
+bloqueou chamadas de emissão; nenhuma regra de preço foi alterada.
+
+Regressão: `npm test -- --runInBand` cobre rateio, recálculo, totais distintos do
+subtotal de produtos, ausência de totais obrigatórios, bloqueio do salvamento em
+falhas e preservação do cálculo avulso. Build: `npm run build`.
 
 ## Installation
 
